@@ -8,4 +8,4 @@ nixPkgs = ["nodejs_20", "python311", "python311Packages.pip"]
 cmds = ["npm install", "pip install anthropic reportlab"]
 
 [start]
-cmd = "node server.js"
+cmd = "npm start"
