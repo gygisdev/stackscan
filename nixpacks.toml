@@ -1,0 +1,8 @@
+[phases.setup]
+nixPkgs = ["python311", "nodejs_20"]
+
+[phases.install]
+cmds = ["npm install", "pip install anthropic reportlab"]
+
+[start]
+cmd = "node server.js"
