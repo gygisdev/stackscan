@@ -17,7 +17,7 @@ const os = require('os');
 
 const app = express();
 app.use(cors({
-  origin: ['https://stackscan.netlify.app', 'http://localhost:3001'],
+  origin: ['https://stackscan.netlify.app', 'http://localhost:3001', 'http://127.0.0.1:5500'],
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type']
 }));
