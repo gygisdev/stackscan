@@ -1,5 +1,8 @@
 providers = ["node"]
 
+[phases.install]
+cmds = ["npm install", "pip3 install anthropic reportlab", "node --version", "python3 --version"]
+
 [phases.setup]
 nixPkgs = ["nodejs_20", "python311", "python311Packages.pip"]
 
