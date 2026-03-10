@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StackScan — Supplement Stack Analyzer</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #13131a;
+    --border: #22222e;
+    --accent: #c8f542;
+    --accent2: #42f5c8;
+    --text: #f0f0f0;
+    --muted: #666680;
+    --danger: #f54242;
+    --warn: #f5a742;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(200,245,66,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(200,245,66,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 0 20px;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Header */
+  header {
+    padding: 48px 0 32px;
+    text-align: center;
+  }
+
+  .logo {
+    font-family: 'Syne', sans-serif;
+    font-weight: 800;
+    font-size: 13px;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 24px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .logo-dot {
+    width: 6px; height: 6px;
+    background: var(--accent);
+    border-radius: 50%;
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.7); }
+  }
+
+  h1 {
+    font-family: 'Syne', sans-serif;
+    font-weight: 800;
+    font-size: clamp(36px, 7vw, 64px);
+    line-height: 1;
+    letter-spacing: -0.02em;
+    margin-bottom: 16px;
+  }
+
+  h1 span { color: var(--accent); }
+
+  .subtitle {
+    color: var(--muted);
+    font-size: 14px;
+    letter-spacing: 0.05em;
+    max-width: 420px;
+    margin: 0 auto;
+    line-height: 1.7;
+  }
+
+  /* Input Section */
+  .input-section {
+    margin: 40px 0;
+  }
+
+  .section-label {
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .section-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  .supplements-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+
+  .supplement-row {
+    display: grid;
+    grid-template-columns: 1fr 140px 44px;
+    gap: 8px;
+    align-items: center;
+    animation: slideIn 0.2s ease;
+  }
+
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  input[type="text"] {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    font-size: 13px;
+    padding: 11px 14px;
+    outline: none;
+    transition: border-color 0.15s;
+    width: 100%;
+  }
+
+  input[type="text"]::placeholder { color: var(--muted); }
+
+  input[type="text"]:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(200,245,66,0.08);
+  }
+
+  .remove-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 18px;
+    height: 44px;
+    width: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+    line-height: 1;
+  }
+
+  .remove-btn:hover {
+    border-color: var(--danger);
+    color: var(--danger);
+  }
+
+  .add-btn {
+    background: none;
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    cursor: pointer;
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    padding: 11px 14px;
+    text-align: left;
+    transition: all 0.15s;
+    width: 100%;
+  }
+
+  .add-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  /* Quick-add chips */
+  .quick-add {
+    margin: 16px 0 28px;
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+  }
+
+  .chip {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 100px;
+    color: var(--muted);
+    cursor: pointer;
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    padding: 5px 12px;
+    transition: all 0.15s;
+    letter-spacing: 0.05em;
+  }
+
+  .chip:hover {
+    border-color: var(--accent2);
+    color: var(--accent2);
+  }
+
+  /* Analyze button */
+  .analyze-btn {
+    background: var(--accent);
+    border: none;
+    border-radius: 8px;
+    color: #0a0a0f;
+    cursor: pointer;
+    font-family: 'Syne', sans-serif;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 16px 32px;
+    text-transform: uppercase;
+    transition: all 0.15s;
+    width: 100%;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .analyze-btn:hover:not(:disabled) {
+    background: #d6ff55;
+    transform: translateY(-1px);
+    box-shadow: 0 8px 32px rgba(200,245,66,0.25);
+  }
+
+  .analyze-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* Loading */
+  .loading-state {
+    display: none;
+    text-align: center;
+    padding: 60px 0;
+  }
+
+  .loading-state.active { display: block; }
+
+  .scanner {
+    width: 80px;
+    height: 80px;
+    margin: 0 auto 24px;
+    position: relative;
+  }
+
+  .scanner-ring {
+    width: 100%;
+    height: 100%;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    position: absolute;
+  }
+
+  .scanner-ring:nth-child(2) {
+    width: 60%;
+    height: 60%;
+    top: 20%;
+    left: 20%;
+    border-top-color: var(--accent2);
+    animation-duration: 0.7s;
+    animation-direction: reverse;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .loading-text {
+    font-size: 12px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--muted);
+    animation: blink 1.5s infinite;
+  }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  /* Results */
+  .results-section {
+    display: none;
+    margin: 40px 0;
+    animation: fadeUp 0.4s ease;
+  }
+
+  .results-section.active { display: block; }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .result-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin-bottom: 12px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .result-card::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 3px;
+  }
+
+  .result-card.ok::before { background: var(--accent); }
+  .result-card.warn::before { background: var(--warn); }
+  .result-card.danger::before { background: var(--danger); }
+  .result-card.info::before { background: var(--accent2); }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+
+  .card-icon {
+    font-size: 18px;
+    line-height: 1;
+  }
+
+  .card-title {
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    font-size: 14px;
+    letter-spacing: 0.03em;
+  }
+
+  .card-tag {
+    margin-left: auto;
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 100px;
+  }
+
+  .result-card.ok .card-tag { color: var(--accent); background: rgba(200,245,66,0.1); }
+  .result-card.warn .card-tag { color: var(--warn); background: rgba(245,167,66,0.1); }
+  .result-card.danger .card-tag { color: var(--danger); background: rgba(245,66,66,0.1); }
+  .result-card.info .card-tag { color: var(--accent2); background: rgba(66,245,200,0.1); }
+
+  .card-body {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.7;
+  }
+
+  .card-body strong { color: var(--text); }
+
+  /* Score */
+  .score-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 28px 24px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+  }
+
+  .score-circle {
+    width: 80px;
+    height: 80px;
+    flex-shrink: 0;
+    position: relative;
+  }
+
+  .score-circle svg { transform: rotate(-90deg); }
+
+  .score-number {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Syne', sans-serif;
+    font-weight: 800;
+    font-size: 22px;
+  }
+
+  .score-info h3 {
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    font-size: 18px;
+    margin-bottom: 6px;
+  }
+
+  .score-info p {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+
+  /* Upsell */
+  .upsell-card {
+    background: linear-gradient(135deg, rgba(200,245,66,0.08), rgba(66,245,200,0.05));
+    border: 1px solid rgba(200,245,66,0.25);
+    border-radius: 10px;
+    padding: 28px 24px;
+    margin-top: 28px;
+    text-align: center;
+  }
+
+  .upsell-badge {
+    display: inline-block;
+    background: var(--accent);
+    color: #0a0a0f;
+    font-family: 'Syne', sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    padding: 4px 12px;
+    border-radius: 100px;
+    margin-bottom: 14px;
+  }
+
+  .upsell-card h3 {
+    font-family: 'Syne', sans-serif;
+    font-weight: 800;
+    font-size: 22px;
+    margin-bottom: 10px;
+    line-height: 1.2;
+  }
+
+  .upsell-card p {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.7;
+    margin-bottom: 20px;
+    max-width: 420px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .upsell-features {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin-bottom: 24px;
+  }
+
+  .upsell-feature {
+    font-size: 12px;
+    color: var(--accent2);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .upsell-btn {
+    background: var(--accent);
+    border: none;
+    border-radius: 8px;
+    color: #0a0a0f;
+    cursor: pointer;
+    font-family: 'Syne', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 14px 32px;
+    text-transform: uppercase;
+    transition: all 0.15s;
+    display: inline-block;
+    text-decoration: none;
+  }
+
+  .upsell-btn:hover {
+    background: #d6ff55;
+    transform: translateY(-1px);
+    box-shadow: 0 8px 32px rgba(200,245,66,0.3);
+  }
+
+  .price-note {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 10px;
+  }
+
+  /* Reset */
+  .reset-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    cursor: pointer;
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    padding: 10px 20px;
+    margin: 20px auto 60px;
+    display: block;
+    transition: all 0.15s;
+    text-transform: uppercase;
+  }
+
+  .reset-btn:hover {
+    border-color: var(--text);
+    color: var(--text);
+  }
+
+  .error-msg {
+    background: rgba(245,66,66,0.1);
+    border: 1px solid rgba(245,66,66,0.3);
+    border-radius: 6px;
+    color: var(--danger);
+    font-size: 12px;
+    padding: 12px 16px;
+    margin-top: 12px;
+    display: none;
+  }
+
+  .raw-output {
+    white-space: pre-wrap;
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.7;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <header>
+    <div class="logo">
+      <span class="logo-dot"></span>
+      StackScan
+    </div>
+    <h1>Analyze Your<br><span>Stack</span></h1>
+    <p class="subtitle">Enter your supplements below. We'll scan for conflicts, redundancies, timing issues, and gaps.</p>
+  </header>
+
+  <!-- Input -->
+  <div class="input-section" id="inputSection">
+    <div class="section-label">Your Supplements</div>
+
+    <div class="supplements-grid" id="supplementsGrid"></div>
+    <button class="add-btn" onclick="addRow()">+ Add supplement</button>
+
+    <div class="quick-add">
+      <div class="section-label">Quick Add</div>
+      <div class="chips">
+        <span class="chip" onclick="quickAdd('Vitamin D3', '5000 IU')">Vitamin D3</span>
+        <span class="chip" onclick="quickAdd('Magnesium Glycinate', '400mg')">Magnesium</span>
+        <span class="chip" onclick="quickAdd('Omega-3 Fish Oil', '2g')">Omega-3</span>
+        <span class="chip" onclick="quickAdd('Creatine', '5g')">Creatine</span>
+        <span class="chip" onclick="quickAdd('Zinc', '30mg')">Zinc</span>
+        <span class="chip" onclick="quickAdd('Vitamin K2', '100mcg')">Vitamin K2</span>
+        <span class="chip" onclick="quickAdd('Ashwagandha', '600mg')">Ashwagandha</span>
+        <span class="chip" onclick="quickAdd('Caffeine', '200mg')">Caffeine</span>
+        <span class="chip" onclick="quickAdd('L-Theanine', '200mg')">L-Theanine</span>
+        <span class="chip" onclick="quickAdd('Multivitamin', '1 capsule')">Multivitamin</span>
+        <span class="chip" onclick="quickAdd('Protein Powder', '30g')">Protein Powder</span>
+        <span class="chip" onclick="quickAdd('Melatonin', '5mg')">Melatonin</span>
+      </div>
+    </div>
+
+    <button class="analyze-btn" id="analyzeBtn" onclick="analyzeStack()">
+      Scan My Stack →
+    </button>
+    <div class="error-msg" id="errorMsg"></div>
+  </div>
+
+  <!-- Loading -->
+  <div class="loading-state" id="loadingState">
+    <div class="scanner">
+      <div class="scanner-ring"></div>
+      <div class="scanner-ring"></div>
+    </div>
+    <div class="loading-text">Analyzing your stack...</div>
+  </div>
+
+  <!-- Results -->
+  <div class="results-section" id="resultsSection">
+    <div class="section-label">Scan Results</div>
+    <div id="resultsContent"></div>
+
+    <div class="upsell-card">
+      <div class="upsell-badge">Upgrade</div>
+      <h3>Get Your Personalized<br>Optimization Report</h3>
+      <p>Get a full personalized PDF with your exact dosing schedule, the best brand and form for each supplement you take, a detailed action plan, and a phased 90-day protocol built around your specific stack.</p>
+      <div class="upsell-features">
+        <span class="upsell-feature">✦ Optimal timing schedule</span>
+        <span class="upsell-feature">✦ Best brand per supplement</span>
+        <span class="upsell-feature">✦ 90-day phased protocol</span>
+        <span class="upsell-feature">✦ Gaps & action plan</span>
+      </div>
+      <button class="upsell-btn" onclick="downloadReport()">Get Full Report — $12</button>
+      <p class="price-note">One-time purchase · Instant PDF download</p>
+    </div>
+
+    <button class="reset-btn" onclick="resetApp()">← Analyze a different stack</button>
+  </div>
+
+</div>
+
+<script>
+  // ── Config ──────────────────────────────────────────────────────────────
+  // Change this to your Railway URL when you deploy to production:
+  // const BACKEND_URL = 'https://stackscan-production.up.railway.app';
+  const BACKEND_URL = 'http://localhost:3001';
+
+  let rows = [];
+
+  function addRow(name = '', dosage = '') {
+    const id = Date.now();
+    rows.push(id);
+    const grid = document.getElementById('supplementsGrid');
+    const div = document.createElement('div');
+    div.className = 'supplement-row';
+    div.id = `row-${id}`;
+    div.innerHTML = `
+      <input type="text" placeholder="Supplement name (e.g. Vitamin D3)" value="${name}" id="name-${id}">
+      <input type="text" placeholder="Dose (e.g. 5000 IU)" value="${dosage}" id="dose-${id}">
+      <button class="remove-btn" onclick="removeRow(${id})">×</button>
+    `;
+    grid.appendChild(div);
+  }
+
+  function removeRow(id) {
+    const el = document.getElementById(`row-${id}`);
+    if (el) el.remove();
+    rows = rows.filter(r => r !== id);
+  }
+
+  function quickAdd(name, dosage) {
+    addRow(name, dosage);
+  }
+
+  function getStack() {
+    return rows.map(id => {
+      const nameEl = document.getElementById(`name-${id}`);
+      const doseEl = document.getElementById(`dose-${id}`);
+      if (!nameEl) return null;
+      const name = nameEl.value.trim();
+      const dose = doseEl.value.trim();
+      return name ? { name, dose } : null;
+    }).filter(Boolean);
+  }
+
+  async function analyzeStack() {
+    const stack = getStack();
+    if (stack.length < 2) {
+      showError('Please add at least 2 supplements to analyze your stack.');
+      return;
+    }
+
+    hideError();
+    showLoading();
+
+    const stackText = stack.map(s => `- ${s.name}${s.dose ? ` (${s.dose})` : ''}`).join('\n');
+
+    const prompt = `You are a supplement science expert. Analyze this supplement stack and provide a clear, practical assessment.
+
+Stack:
+${stackText}
+
+Respond ONLY with a valid JSON object (no markdown, no backticks) with this exact structure:
+{
+  "score": <number 1-100>,
+  "scoreLabel": "<one of: Excellent / Good / Fair / Needs Work>",
+  "scoreSummary": "<1-2 sentence overall summary>",
+  "findings": [
+    {
+      "type": "<one of: ok / warn / danger / info>",
+      "icon": "<single emoji>",
+      "title": "<short finding title>",
+      "tag": "<one of: Synergy / Conflict / Redundancy / Timing / Dosage / Gap>",
+      "body": "<2-3 sentence practical explanation. Use <strong> tags to bold supplement names.>"
+    }
+  ]
+}
+
+Include 4-7 findings covering: any dangerous interactions, redundancies (e.g. two things doing the same job), positive synergies, timing advice, and 1-2 notable gaps in the stack. Be specific and practical, not generic.`;
+
+    try {
+      const response = await fetch(`${BACKEND_URL}/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stack })
+      });
+
+      if (!response.ok) throw new Error(`Server error: ${response.status}`);
+
+      const result = await response.json();
+      showResults(result);
+    } catch (err) {
+      hideLoading();
+      showError('Something went wrong analyzing your stack. Make sure your backend server is running (node server.js), then try again.');
+      console.error(err);
+    }
+  }
+
+  function showResults(result) {
+    hideLoading();
+
+    const scoreColor = result.score >= 75 ? '#c8f542' : result.score >= 50 ? '#f5a742' : '#f54242';
+    const circumference = 2 * Math.PI * 34;
+    const dashOffset = circumference - (result.score / 100) * circumference;
+
+    let html = `
+      <div class="score-card">
+        <div class="score-circle">
+          <svg width="80" height="80" viewBox="0 0 80 80">
+            <circle cx="40" cy="40" r="34" fill="none" stroke="#22222e" stroke-width="6"/>
+            <circle cx="40" cy="40" r="34" fill="none" stroke="${scoreColor}" stroke-width="6"
+              stroke-dasharray="${circumference}" stroke-dashoffset="${dashOffset}"
+              stroke-linecap="round" style="transition: stroke-dashoffset 1s ease"/>
+          </svg>
+          <div class="score-number" style="color:${scoreColor}">${result.score}</div>
+        </div>
+        <div class="score-info">
+          <h3>${result.scoreLabel} Stack</h3>
+          <p>${result.scoreSummary}</p>
+        </div>
+      </div>
+    `;
+
+    result.findings.forEach(f => {
+      html += `
+        <div class="result-card ${f.type}">
+          <div class="card-header">
+            <span class="card-icon">${f.icon}</span>
+            <span class="card-title">${f.title}</span>
+            <span class="card-tag">${f.tag}</span>
+          </div>
+          <div class="card-body">${f.body}</div>
+        </div>
+      `;
+    });
+
+    document.getElementById('resultsContent').innerHTML = html;
+    document.getElementById('resultsSection').classList.add('active');
+    document.getElementById('inputSection').style.display = 'none';
+  }
+
+  function showLoading() {
+    document.getElementById('inputSection').style.display = 'none';
+    document.getElementById('loadingState').classList.add('active');
+  }
+
+  function hideLoading() {
+    document.getElementById('loadingState').classList.remove('active');
+  }
+
+  function showError(msg) {
+    const el = document.getElementById('errorMsg');
+    el.textContent = msg;
+    el.style.display = 'block';
+    document.getElementById('inputSection').style.display = 'block';
+  }
+
+  function hideError() {
+    document.getElementById('errorMsg').style.display = 'none';
+  }
+
+  async function downloadReport() {
+    const stack = getStack();
+    const email = prompt('Enter your email — your report will also be sent there:') || '';
+    const btn = document.querySelector('.upsell-btn');
+    btn.textContent = 'Generating your report...';
+    btn.style.opacity = '0.6';
+    btn.disabled = true;
+    try {
+      const response = await fetch(`${BACKEND_URL}/generate-report`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stack, email })
+      });
+      if (!response.ok) throw new Error('Generation failed');
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'stackscan_report.pdf';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert('Something went wrong generating your report. Please try again.');
+      console.error(err);
+    } finally {
+      btn.textContent = 'Get Full Report — $12';
+      btn.style.opacity = '1';
+      btn.disabled = false;
+    }
+  }
+
+  function resetApp() {
+    document.getElementById('resultsSection').classList.remove('active');
+    document.getElementById('inputSection').style.display = 'block';
+  }
+
+  // Seed 3 starter rows
+  addRow('Vitamin D3', '5000 IU');
+  addRow('Zinc', '50mg');
+  addRow('Magnesium Glycinate', '400mg');
+</script>
+</body>
+</html>
