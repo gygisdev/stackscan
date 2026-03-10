@@ -16,7 +16,11 @@ const crypto = require('crypto');
 const os = require('os');
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: ['https://stackscan.netlify.app', 'http://localhost:3001'],
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type']
+}));
 app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
