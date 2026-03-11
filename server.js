@@ -18,6 +18,7 @@ const crypto     = require('crypto');
 const app    = express();
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const PORT   = process.env.PORT || 3001;
+console.log(`Starting server on PORT=${PORT}`);
 
 // ── Colors ────────────────────────────────────────────────────────────────────
 const C = {
@@ -580,6 +581,6 @@ app.get('/health', (req, res) => {
 });
 
 
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`StackScan backend running on port ${PORT}`);
 });
