@@ -124,184 +124,204 @@ Respond ONLY with valid JSON (no markdown). Write directly to the user as "you".
 
 
 // ── PDF Builder ───────────────────────────────────────────────────────────────
+// Uses doc.heightOfString() to pre-calculate all heights — zero dry runs.
+// Every newPage() fills the background immediately so no page is ever white.
 
 function buildPDF(data, protocol, stack, email) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
       size: 'letter',
-      margins: { top: 46, bottom: 46, left: 46, right: 46 },
       bufferPages: true,
+      autoFirstPage: false,
       info: { Title: 'StackScan Report', Author: 'StackScan' }
     });
 
     const chunks = [];
     doc.on('data', c => chunks.push(c));
-    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('end',  () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
-    const W = doc.page.width - 92;   // usable width
-    const L = 46;                     // left margin
+    // ── Constants ──────────────────────────────────────────────────────────
+    const PW = 612, PH = 792;
+    const ML = 50, W = 512;          // left margin, usable width
+    const CONTENT_W = W - 32;        // card inner text width
+    const CARD_X = ML + 18;          // card text x (after accent bar + padding)
+    const FOOTER_H = 36;
+    const BOTTOM = PH - FOOTER_H - 10; // y below which we never render content
 
-    // ── Helpers ────────────────────────────────────────────────────────────
-    function fillPage() {
-      doc.rect(0, 0, doc.page.width, doc.page.height).fill(C.bg);
+    // ── Page management ────────────────────────────────────────────────────
+    function newPage() {
+      doc.addPage({ size: 'letter', margins: { top: 0, bottom: 0, left: 0, right: 0 } });
+      // Fill background FIRST before anything else touches this page
+      doc.rect(0, 0, PW, PH).fill(C.bg);
+      doc.y = 50;
     }
 
-    function rule(y, color = C.border, thickness = 0.5) {
-      doc.moveTo(L, y).lineTo(L + W, y).lineWidth(thickness).strokeColor(color).stroke();
+    function ensureSpace(h) {
+      if (doc.y + h > BOTTOM) newPage();
+    }
+
+    // ── Text helpers ───────────────────────────────────────────────────────
+    function safe(s) { return (s || '').replace(/<[^>]+>/g, '').trim(); }
+
+    // Pre-calculate how tall a block of text will be
+    function textH(text, fontSize, font, width) {
+      doc.fontSize(fontSize).font(font);
+      return doc.heightOfString(text, { width });
+    }
+
+    // Write text and advance doc.y manually — never rely on PDFKit's auto-advance
+    // after fills/strokes since those reset the cursor unpredictably
+    function writeText(text, x, y, fontSize, font, color, opts = {}) {
+      doc.fontSize(fontSize).font(font).fillColor(color)
+         .text(text, x, y, { width: opts.width || CONTENT_W, lineBreak: true, ...opts });
+      // Return the bottom y of this text block
+      return y + doc.heightOfString(text, { width: opts.width || CONTENT_W });
+    }
+
+    // ── Drawing primitives ─────────────────────────────────────────────────
+    function hRule(y, color, thick = 0.5) {
+      doc.moveTo(ML, y).lineTo(ML + W, y).lineWidth(thick).strokeColor(color).stroke();
     }
 
     function sectionHeader(title) {
-      doc.moveDown(0.8);
+      ensureSpace(34);
+      doc.y += 10;
       const y = doc.y;
-      doc.fontSize(11).font('Helvetica-Bold').fillColor(C.accent).text(title.toUpperCase(), L, y);
-      doc.moveDown(0.3);
-      rule(doc.y, C.accent, 1);
-      doc.moveDown(0.5);
+      doc.fontSize(10).font('Helvetica-Bold').fillColor(C.accent)
+         .text(title.toUpperCase(), ML, y, { width: W });
+      doc.y = y + 14;
+      hRule(doc.y, C.accent, 1);
+      doc.y += 8;
     }
 
-    function card(drawFn, options = {}) {
-      const { accentColor = null, minHeight = 0 } = options;
-      const startY = doc.y;
-      const padX = 14, padY = 12;
+    // ── Card renderer — height calculated via heightOfString, never dry-run ─
+    function card(accentColor, lines) {
+      // lines = array of { text, fontSize, font, color, marginBottom? }
+      // Calculate total inner height
+      const PAD = 12;
+      let innerH = 0;
+      lines.forEach(l => {
+        innerH += textH(safe(l.text), l.fontSize, l.font, CONTENT_W);
+        innerH += (l.marginBottom !== undefined ? l.marginBottom : 4);
+      });
+      const cardH = innerH + PAD * 2;
 
-      // Estimate content height by rendering off-page first
-      doc.save();
-      const contentX = L + padX + (accentColor ? 6 : 0);
-      const contentW = W - padX * 2 - (accentColor ? 6 : 0);
-      drawFn(contentX, startY + padY, contentW, true); // dry run
-      const estimatedH = Math.max(doc.y - startY + padY, minHeight);
-      doc.restore();
-
-      // Check page break
-      if (startY + estimatedH > doc.page.height - 60) {
-        doc.addPage();
-        fillPage();
-      }
+      ensureSpace(cardH + 8);
 
       const cardY = doc.y;
-      const cardH = estimatedH + padY;
 
-      // Card background
-      doc.roundedRect(L, cardY, W, cardH, 4).fill(C.surface);
+      // Draw card background + border first
+      doc.rect(ML, cardY, W, cardH).fill(C.surface);
+      if (accentColor) doc.rect(ML, cardY, 4, cardH).fill(accentColor);
+      doc.rect(ML, cardY, W, cardH).lineWidth(0.5).strokeColor(C.border).stroke();
 
-      // Accent bar
-      if (accentColor) {
-        doc.rect(L, cardY, 3, cardH).fill(accentColor);
-      }
+      // Now write text lines from top padding
+      let textY = cardY + PAD;
+      lines.forEach(l => {
+        const h = textH(safe(l.text), l.fontSize, l.font, CONTENT_W);
+        doc.fontSize(l.fontSize).font(l.font).fillColor(l.color)
+           .text(safe(l.text), CARD_X, textY, { width: CONTENT_W });
+        textY += h + (l.marginBottom !== undefined ? l.marginBottom : 4);
+      });
 
-      // Border
-      doc.roundedRect(L, cardY, W, cardH, 4).lineWidth(0.5).strokeColor(C.border).stroke();
-
-      // Render content for real
-      drawFn(contentX, cardY + padY, contentW, false);
-
-      doc.y = cardY + cardH + 6;
+      doc.y = cardY + cardH + 8;
     }
 
-    function typeColor(type) {
-      return { ok: C.ok, warn: C.warn, danger: C.danger, info: C.accent2 }[type] || C.accent2;
+    function typeColor(t) {
+      return { ok: C.ok, warn: C.warn, danger: C.danger, info: C.accent2 }[t] || C.accent2;
     }
 
-    function safeText(str) {
-      // Strip HTML tags that came from prompts
-      return (str || '').replace(/<[^>]+>/g, '');
-    }
-
-    // ── Page 1: Cover ──────────────────────────────────────────────────────
-    fillPage();
-
-    // Header bar
-    const dateStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-    doc.fontSize(8).font('Helvetica-Bold').fillColor(C.accent)
-       .text('STACKSCAN', L, 52, { continued: true });
-    doc.font('Helvetica').fillColor(C.muted)
-       .text(`Generated ${dateStr}`, { align: 'right' });
-    rule(doc.y + 4, C.accent, 1.5);
-    doc.moveDown(1.2);
-
-    // Title
-    doc.fontSize(30).font('Helvetica-Bold').fillColor(C.text)
-       .text('Your Personalized', L);
-    doc.fontSize(30).font('Helvetica-Bold').fillColor(C.accent)
-       .text('Supplement Report', L);
-    doc.moveDown(0.4);
-    doc.fontSize(11).font('Helvetica').fillColor(C.text)
-       .text(safeText(data.headline || ''), L, doc.y, { width: W });
-    doc.moveDown(0.3);
-    if (email) {
-      doc.fontSize(8).fillColor(C.muted).text(`Prepared for: ${email}`, L);
-    }
-    doc.moveDown(1);
-
-    // Score card
-    const score = data.score || 0;
-    const scoreColor = score >= 75 ? C.ok : score >= 50 ? C.warn : C.danger;
-    const scoreCardY = doc.y;
-    const scoreCardH = 80;
-    doc.roundedRect(L, scoreCardY, W, scoreCardH, 4).fill(C.surface);
-    doc.roundedRect(L, scoreCardY, W, scoreCardH, 4).lineWidth(0.5).strokeColor(C.border).stroke();
-
-    // Score circle
-    const cx = L + 52, cy = scoreCardY + 40, r = 28;
-    doc.circle(cx, cy, r).lineWidth(5).strokeColor(C.border).stroke();
-    // Score arc (approximate with filled circle overlay)
-    doc.circle(cx, cy, r).lineWidth(5).strokeColor(scoreColor).stroke();
-    doc.fontSize(20).font('Helvetica-Bold').fillColor(scoreColor)
-       .text(String(score), cx - 18, cy - 13, { width: 36, align: 'center' });
-
-    // Score label + summary
-    const textX = L + 96;
-    doc.fontSize(13).font('Helvetica-Bold').fillColor(C.text)
-       .text(`${data.scoreLabel || ''} Stack`, textX, scoreCardY + 14, { width: W - 100 });
-    doc.fontSize(9).font('Helvetica').fillColor(C.muted)
-       .text(safeText(data.summary || ''), textX, doc.y + 2, { width: W - 100 });
-    doc.y = scoreCardY + scoreCardH + 12;
-
-    // ── Your Stack table ───────────────────────────────────────────────────
-    sectionHeader('Your Stack');
-    const colW = [W * 0.6, W * 0.4];
+    // ── PAGE 1 ─────────────────────────────────────────────────────────────
+    newPage();
 
     // Header row
-    const tableY = doc.y;
-    doc.rect(L, tableY, W, 24).fill('#1a1a22');
+    const dateStr = new Date().toLocaleDateString('en-US',
+      { year: 'numeric', month: 'long', day: 'numeric' });
+    doc.fontSize(8).font('Helvetica-Bold').fillColor(C.accent)
+       .text('STACKSCAN', ML, 50, { continued: true, width: W });
+    doc.font('Helvetica').fillColor(C.muted)
+       .text(`Generated ${dateStr}`, { align: 'right' });
+    doc.y = 62;
+    hRule(doc.y, C.accent, 1.5);
+    doc.y += 14;
+
+    // Title
+    doc.fontSize(28).font('Helvetica-Bold').fillColor(C.text)
+       .text('Your Personalized', ML, doc.y, { width: W });
+    doc.y += 32;
+    doc.fontSize(28).font('Helvetica-Bold').fillColor(C.accent)
+       .text('Supplement Report', ML, doc.y, { width: W });
+    doc.y += 36;
+
+    if (data.headline) {
+      doc.fontSize(11).font('Helvetica').fillColor(C.text)
+         .text(safe(data.headline), ML, doc.y, { width: W });
+      doc.y += doc.heightOfString(safe(data.headline), { width: W }) + 6;
+    }
+    if (email) {
+      doc.fontSize(8).font('Helvetica').fillColor(C.muted)
+         .text(`Prepared for: ${email}`, ML, doc.y, { width: W });
+      doc.y += 14;
+    }
+    doc.y += 8;
+
+    // Score banner
+    const score = data.score || 0;
+    const scoreColor = score >= 75 ? C.ok : score >= 50 ? C.warn : C.danger;
+    const bannerY = doc.y;
+    const summaryText = safe(data.summary || '');
+    const summaryH = textH(summaryText, 9, 'Helvetica', W - 90);
+    const bannerH = Math.max(70, summaryH + 24);
+
+    doc.rect(ML, bannerY, W, bannerH).fill(C.surface);
+    doc.rect(ML, bannerY, W, bannerH).lineWidth(0.5).strokeColor(C.border).stroke();
+
+    // Score block (left side)
+    doc.fontSize(34).font('Helvetica-Bold').fillColor(scoreColor)
+       .text(String(score), ML + 8, bannerY + 10, { width: 68, align: 'center' });
+    doc.fontSize(8).font('Helvetica').fillColor(C.muted)
+       .text(`${data.scoreLabel || ''} Stack`, ML + 8, bannerY + 46, { width: 68, align: 'center' });
+
+    // Summary (right side)
+    doc.fontSize(9).font('Helvetica').fillColor(C.muted)
+       .text(summaryText, ML + 84, bannerY + 12, { width: W - 90 });
+
+    doc.y = bannerY + bannerH + 14;
+
+    // ── Stack table ────────────────────────────────────────────────────────
+    sectionHeader('Your Stack');
+    const ROW_H = 22, COL1 = W * 0.62;
+    const thY = doc.y;
+    doc.rect(ML, thY, W, ROW_H).fill('#1a1a22');
     doc.fontSize(8).font('Helvetica-Bold').fillColor(C.accent2)
-       .text('SUPPLEMENT', L + 10, tableY + 8, { width: colW[0] });
-    doc.text('DOSE', L + colW[0] + 10, tableY + 8, { width: colW[1] });
-    doc.y = tableY + 24;
+       .text('SUPPLEMENT', ML + 10, thY + 7, { width: COL1 - 10 });
+    doc.text('DOSE', ML + COL1 + 6, thY + 7, { width: W - COL1 - 10 });
+    doc.y = thY + ROW_H;
 
     stack.forEach((s, i) => {
-      const rowY = doc.y;
-      const rowH = 22;
-      doc.rect(L, rowY, W, rowH).fill(i % 2 === 0 ? C.surface : '#16161e');
+      ensureSpace(ROW_H + 2);
+      const rY = doc.y;
+      doc.rect(ML, rY, W, ROW_H).fill(i % 2 === 0 ? C.surface : '#16161e');
       doc.fontSize(9).font('Helvetica-Bold').fillColor(C.text)
-         .text(s.name, L + 10, rowY + 7, { width: colW[0] - 10 });
-      doc.font('Helvetica').fillColor(C.muted)
-         .text(s.dose || '-', L + colW[0] + 10, rowY + 7, { width: colW[1] - 10 });
-      doc.y = rowY + rowH;
+         .text(s.name, ML + 10, rY + 7, { width: COL1 - 14 });
+      doc.fontSize(9).font('Helvetica').fillColor(C.muted)
+         .text(s.dose || '-', ML + COL1 + 6, rY + 7, { width: W - COL1 - 10 });
+      doc.y = rY + ROW_H;
     });
-    doc.rect(L, tableY, W, doc.y - tableY).lineWidth(0.5).strokeColor(C.border).stroke();
-    doc.moveDown(0.5);
+    doc.rect(ML, thY, W, doc.y - thY).lineWidth(0.5).strokeColor(C.border).stroke();
+    doc.y += 8;
 
     // ── Timing Schedule ────────────────────────────────────────────────────
     if (data.timing_schedule && data.timing_schedule.length) {
       sectionHeader('Optimal Timing Schedule');
       data.timing_schedule.forEach(slot => {
         const supps = (slot.supplements || []).join(', ');
-        card((x, y, w, dry) => {
-          if (!dry) {
-            doc.fontSize(10).font('Helvetica-Bold').fillColor(C.accent)
-               .text(slot.time || '', x, y, { width: w });
-            doc.moveDown(0.2);
-            doc.fontSize(9).font('Helvetica-Bold').fillColor(C.text)
-               .text(supps, x, doc.y, { width: w });
-            doc.moveDown(0.2);
-            doc.fontSize(9).font('Helvetica').fillColor(C.muted)
-               .text(safeText(slot.reason || ''), x, doc.y, { width: w });
-          } else {
-            doc.fontSize(9).text(safeText(slot.reason || ''), x, y, { width: w });
-          }
-        }, { accentColor: C.accent });
+        card(C.accent, [
+          { text: slot.time || '',   fontSize: 10, font: 'Helvetica-Bold', color: C.accent,  marginBottom: 3 },
+          { text: supps,             fontSize: 9,  font: 'Helvetica-Bold', color: C.text,    marginBottom: 3 },
+          { text: slot.reason || '', fontSize: 9,  font: 'Helvetica',      color: C.muted,   marginBottom: 0 },
+        ]);
       });
     }
 
@@ -309,41 +329,22 @@ function buildPDF(data, protocol, stack, email) {
     sectionHeader('Detailed Analysis');
     (data.findings || []).forEach(f => {
       const fc = typeColor(f.type);
-      card((x, y, w, dry) => {
-        if (!dry) {
-          doc.fontSize(10).font('Helvetica-Bold').fillColor(C.text)
-             .text(f.title || '', x, y, { width: w - 60, continued: true });
-          doc.fontSize(7).font('Helvetica-Bold').fillColor(fc)
-             .text(`  ${(f.tag || '').toUpperCase()}`, { align: 'right' });
-          doc.moveDown(0.3);
-          doc.fontSize(9).font('Helvetica').fillColor(C.muted)
-             .text(safeText(f.detail || ''), x, doc.y, { width: w });
-        } else {
-          doc.fontSize(9).text(safeText(f.detail || ''), x, y, { width: w });
-        }
-      }, { accentColor: fc });
+      const tagLine = `${f.title || ''}   [${(f.tag || '').toUpperCase()}]`;
+      card(fc, [
+        { text: tagLine,     fontSize: 10, font: 'Helvetica-Bold', color: C.text,  marginBottom: 4 },
+        { text: f.detail || '', fontSize: 9, font: 'Helvetica',    color: C.muted, marginBottom: 0 },
+      ]);
     });
 
     // ── Brand Recommendations ──────────────────────────────────────────────
     if (data.brand_recommendations && data.brand_recommendations.length) {
       sectionHeader('Brand & Form Recommendations');
       data.brand_recommendations.forEach(b => {
-        card((x, y, w, dry) => {
-          if (!dry) {
-            doc.fontSize(10).font('Helvetica-Bold').fillColor(C.text)
-               .text(b.supplement || '', x, y, { width: w });
-            doc.moveDown(0.2);
-            doc.fontSize(9).font('Helvetica-Bold').fillColor(C.accent)
-               .text(b.recommended_brand || '', x, doc.y, { continued: true });
-            doc.font('Helvetica').fillColor(C.accent2)
-               .text(`  •  ${b.form || ''}`, { continued: false });
-            doc.moveDown(0.2);
-            doc.fontSize(9).font('Helvetica').fillColor(C.muted)
-               .text(safeText(b.reason || ''), x, doc.y, { width: w });
-          } else {
-            doc.fontSize(9).text(safeText(b.reason || ''), x, y, { width: w });
-          }
-        }, { accentColor: C.accent2 });
+        card(C.accent2, [
+          { text: b.supplement || '',                              fontSize: 10, font: 'Helvetica-Bold', color: C.text,    marginBottom: 3 },
+          { text: `${b.recommended_brand || ''}   •   ${b.form || ''}`, fontSize: 9, font: 'Helvetica-Bold', color: C.accent,  marginBottom: 3 },
+          { text: b.reason || '',                                  fontSize: 9,  font: 'Helvetica',      color: C.muted,   marginBottom: 0 },
+        ]);
       });
     }
 
@@ -353,19 +354,11 @@ function buildPDF(data, protocol, stack, email) {
       const actionColors = { Add: C.ok, Remove: C.danger, Adjust: C.warn, Split: C.accent2 };
       data.recommendations.forEach(r => {
         const ac = actionColors[r.action] || C.accent2;
-        card((x, y, w, dry) => {
-          if (!dry) {
-            doc.fontSize(9).font('Helvetica-Bold').fillColor(ac)
-               .text((r.action || '').toUpperCase(), x, y, { continued: true });
-            doc.fillColor(C.text)
-               .text(`  ${r.supplement || ''}${r.suggested_dose ? '  →  ' + r.suggested_dose : ''}`);
-            doc.moveDown(0.2);
-            doc.fontSize(9).font('Helvetica').fillColor(C.muted)
-               .text(safeText(r.reason || ''), x, doc.y, { width: w });
-          } else {
-            doc.fontSize(9).text(safeText(r.reason || ''), x, y, { width: w });
-          }
-        }, { accentColor: ac });
+        const headline = `${(r.action || '').toUpperCase()}  ${r.supplement || ''}${r.suggested_dose ? '   →   ' + r.suggested_dose : ''}`;
+        card(ac, [
+          { text: headline,    fontSize: 9,  font: 'Helvetica-Bold', color: ac,     marginBottom: 3 },
+          { text: r.reason || '', fontSize: 9, font: 'Helvetica',    color: C.muted, marginBottom: 0 },
+        ]);
       });
     }
 
@@ -373,33 +366,23 @@ function buildPDF(data, protocol, stack, email) {
     if (data.gaps && data.gaps.length) {
       sectionHeader('Gaps In Your Stack');
       data.gaps.forEach(g => {
-        card((x, y, w, dry) => {
-          if (!dry) {
-            doc.fontSize(10).font('Helvetica-Bold').fillColor(C.text)
-               .text(g.nutrient || '', x, y, { continued: true });
-            doc.fontSize(9).font('Helvetica').fillColor(C.accent)
-               .text(`  ${g.suggested_dose || ''}`);
-            doc.moveDown(0.2);
-            doc.fontSize(9).font('Helvetica').fillColor(C.muted)
-               .text(safeText(g.why || ''), x, doc.y, { width: w });
-          } else {
-            doc.fontSize(9).text(safeText(g.why || ''), x, y, { width: w });
-          }
-        }, { accentColor: C.warn });
+        card(C.warn, [
+          { text: `${g.nutrient || ''}   ${g.suggested_dose || ''}`, fontSize: 10, font: 'Helvetica-Bold', color: C.text,   marginBottom: 3 },
+          { text: g.why || '',  fontSize: 9, font: 'Helvetica',      color: C.muted, marginBottom: 0 },
+        ]);
       });
     }
 
-    // ── 90-Day Protocol (new page) ─────────────────────────────────────────
-    doc.addPage();
-    fillPage();
-    doc.y = 52;
-
+    // ── 90-Day Protocol — always starts on a fresh page ────────────────────
+    newPage();
     sectionHeader('Your 90-Day Protocol');
 
     if (protocol.intro) {
+      const introText = safe(protocol.intro);
+      ensureSpace(textH(introText, 10, 'Helvetica', W) + 16);
       doc.fontSize(10).font('Helvetica').fillColor(C.text)
-         .text(safeText(protocol.intro), L, doc.y, { width: W });
-      doc.moveDown(0.8);
+         .text(introText, ML, doc.y, { width: W });
+      doc.y += textH(introText, 10, 'Helvetica', W) + 16;
     }
 
     const phaseColors = [C.accent, C.accent2, C.warn];
@@ -407,59 +390,35 @@ function buildPDF(data, protocol, stack, email) {
       const phase = protocol[key];
       if (!phase) return;
       const pc = phaseColors[i];
-
-      card((x, y, w, dry) => {
-        if (!dry) {
-          // Phase title
-          doc.fontSize(12).font('Helvetica-Bold').fillColor(pc)
-             .text(phase.title || '', x, y, { continued: true });
-          doc.fontSize(9).font('Helvetica').fillColor(C.muted)
-             .text(`  ${phase.weeks || ''}`);
-          doc.moveDown(0.4);
-
-          // Sub-sections
-          const sub = (label, text, color) => {
-            doc.fontSize(7).font('Helvetica-Bold').fillColor(color)
-               .text(label, x, doc.y);
-            doc.moveDown(0.2);
-            doc.fontSize(9).font('Helvetica').fillColor(C.text)
-               .text(safeText(text || ''), x, doc.y, { width: w });
-            doc.moveDown(0.4);
-          };
-          sub('DAILY ROUTINE', phase.daily_routine, pc);
-          sub('WHAT TO EXPECT', phase.what_to_expect, C.accent2);
-          sub('WATCH OUT FOR', phase.watch_out_for, C.warn);
-        } else {
-          const total = [phase.daily_routine, phase.what_to_expect, phase.watch_out_for]
-            .map(t => safeText(t || '')).join(' ');
-          doc.fontSize(9).text(total, x, y, { width: w });
-        }
-      }, { accentColor: pc });
+      card(pc, [
+        { text: `${phase.title || ''}   ${phase.weeks || ''}`, fontSize: 12, font: 'Helvetica-Bold', color: pc,      marginBottom: 10 },
+        { text: 'DAILY ROUTINE',                               fontSize: 7,  font: 'Helvetica-Bold', color: pc,      marginBottom: 3  },
+        { text: phase.daily_routine || '',                     fontSize: 9,  font: 'Helvetica',      color: C.text,  marginBottom: 8  },
+        { text: 'WHAT TO EXPECT',                              fontSize: 7,  font: 'Helvetica-Bold', color: C.accent2, marginBottom: 3 },
+        { text: phase.what_to_expect || '',                    fontSize: 9,  font: 'Helvetica',      color: C.text,  marginBottom: 8  },
+        { text: 'WATCH OUT FOR',                               fontSize: 7,  font: 'Helvetica-Bold', color: C.warn,  marginBottom: 3  },
+        { text: phase.watch_out_for || '',                     fontSize: 9,  font: 'Helvetica',      color: C.text,  marginBottom: 0  },
+      ]);
     });
 
     // Tracking tips
     if (protocol.tracking_tips) {
       sectionHeader('What To Track');
+      const tt = safe(protocol.tracking_tips);
+      ensureSpace(textH(tt, 10, 'Helvetica', W) + 16);
       doc.fontSize(10).font('Helvetica').fillColor(C.text)
-         .text(safeText(protocol.tracking_tips), L, doc.y, { width: W });
-      doc.moveDown(0.8);
+         .text(tt, ML, doc.y, { width: W });
+      doc.y += textH(tt, 10, 'Helvetica', W) + 16;
     }
 
     // Common mistakes
     if (protocol.common_mistakes && protocol.common_mistakes.length) {
       sectionHeader('Common Mistakes To Avoid');
       protocol.common_mistakes.forEach(m => {
-        card((x, y, w, dry) => {
-          if (!dry) {
-            doc.fontSize(10).font('Helvetica-Bold').fillColor(C.danger)
-               .text(m.mistake || '', x, y, { width: w });
-            doc.moveDown(0.2);
-            doc.fontSize(9).font('Helvetica').fillColor(C.muted)
-               .text(safeText(m.why_it_matters || ''), x, doc.y, { width: w });
-          } else {
-            doc.fontSize(9).text(safeText(m.why_it_matters || ''), x, y, { width: w });
-          }
-        }, { accentColor: C.danger });
+        card(C.danger, [
+          { text: m.mistake || '',          fontSize: 10, font: 'Helvetica-Bold', color: C.danger, marginBottom: 3 },
+          { text: m.why_it_matters || '',   fontSize: 9,  font: 'Helvetica',      color: C.muted,  marginBottom: 0 },
+        ]);
       });
     }
 
@@ -467,37 +426,39 @@ function buildPDF(data, protocol, stack, email) {
     if (protocol.faq && protocol.faq.length) {
       sectionHeader('Frequently Asked Questions');
       protocol.faq.forEach(item => {
+        const qH = textH(safe(item.question || ''), 10, 'Helvetica-Bold', W);
+        const aH = textH(safe(item.answer   || ''), 9,  'Helvetica',      W);
+        ensureSpace(qH + aH + 20);
         doc.fontSize(10).font('Helvetica-Bold').fillColor(C.accent2)
-           .text(item.question || '', L, doc.y, { width: W });
-        doc.moveDown(0.3);
+           .text(safe(item.question || ''), ML, doc.y, { width: W });
+        doc.y += qH + 4;
         doc.fontSize(9).font('Helvetica').fillColor(C.muted)
-           .text(safeText(item.answer || ''), L, doc.y, { width: W });
-        doc.moveDown(0.6);
-        rule(doc.y, '#1e1e28');
-        doc.moveDown(0.5);
+           .text(safe(item.answer || ''), ML, doc.y, { width: W });
+        doc.y += aH + 10;
+        hRule(doc.y, C.border);
+        doc.y += 8;
       });
     }
 
-    // ── Footer on every page ───────────────────────────────────────────────
+    // ── Footers on every page ──────────────────────────────────────────────
     const pageCount = doc.bufferedPageRange().count;
     for (let i = 0; i < pageCount; i++) {
       doc.switchToPage(i);
-      const footY = doc.page.height - 34;
-      rule(footY, C.border);
+      const fy = PH - FOOTER_H + 4;
+      // Solid dark strip behind footer
+      doc.rect(0, PH - FOOTER_H, PW, FOOTER_H).fill(C.bg);
+      hRule(fy - 2, C.border, 0.5);
       doc.fontSize(7).font('Helvetica').fillColor(C.muted)
-         .text(
-           'This report is for informational purposes only and does not constitute medical advice.',
-           L, footY + 6, { width: W * 0.7 }
-         );
-      doc.fillColor('#333344')
-         .text(`stackscan.io  •  Page ${i + 1} of ${pageCount}`, L, footY + 6,
-               { width: W, align: 'right' });
+         .text('For informational purposes only. Not medical advice.',
+               ML, fy + 4, { width: W * 0.6 });
+      doc.fillColor('#444455')
+         .text(`stackscan.io  •  Page ${i + 1} of ${pageCount}`,
+               ML, fy + 4, { width: W, align: 'right' });
     }
 
     doc.end();
   });
 }
-
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
