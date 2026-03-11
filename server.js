@@ -33,11 +33,7 @@ const C = {
   ok:      '#c8f542',
 };
 
-app.use(cors({
-  origin: ['https://stackscan.netlify.app', 'http://localhost:3001', 'http://127.0.0.1:5500'],
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type']
-}));
+app.use(cors());
 app.use(express.json());
 
 
