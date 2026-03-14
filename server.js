@@ -9,16 +9,31 @@
 
 'use strict';
 
-const express    = require('express');
-const cors       = require('cors');
+const express     = require('express');
+const cors        = require('cors');
 const PDFDocument = require('pdfkit');
-const Anthropic  = require('@anthropic-ai/sdk');
-const crypto     = require('crypto');
+const Anthropic   = require('@anthropic-ai/sdk');
+const crypto      = require('crypto');
+const Stripe      = require('stripe');
+const { Resend }  = require('resend');
 
 const app    = express();
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const PORT   = process.env.PORT || 3001;
 console.log(`Starting server on PORT=${PORT}`);
+
+const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+// ── In-memory session store ───────────────────────────────────────────────────
+// Stores stack+profile keyed by a UUID until webhook fires and generates the PDF.
+// TTL: 2 hours. Railway restarts clear this, which is fine — sessions are short-lived.
+const pendingSessions = new Map();
+function storePendingSession(id, data) {
+  pendingSessions.set(id, { ...data, createdAt: Date.now() });
+  // Auto-cleanup after 2 hours
+  setTimeout(() => pendingSessions.delete(id), 2 * 60 * 60 * 1000);
+}
 
 // ── Colors ────────────────────────────────────────────────────────────────────
 const C = {
@@ -35,7 +50,15 @@ const C = {
 };
 
 app.use(cors());
-app.use(express.json());
+
+// Raw body for Stripe webhook — must come BEFORE express.json()
+app.use('/webhook', express.raw({ type: 'application/json' }));
+
+// JSON body for all other routes
+app.use((req, res, next) => {
+  if (req.path === '/webhook') return next();
+  express.json()(req, res, next);
+});
 
 
 // ── Claude API Calls ─────────────────────────────────────────────────────────
@@ -581,36 +604,163 @@ Include 4-7 findings. Be specific and personal, not generic.`;
 
 
 /**
- * POST /generate-report
- * Paid full report — generates PDF in memory and streams it back
+ * POST /create-checkout
+ * Creates a Stripe Checkout session. Stores stack+profile server-side keyed
+ * by a UUID passed as client_reference_id so the webhook can retrieve it.
  */
-app.post('/generate-report', async (req, res) => {
+app.post('/create-checkout', async (req, res) => {
   const { stack, email = '', profile = null } = req.body;
   if (!stack || stack.length < 1) {
     return res.status(400).json({ error: 'No supplements provided.' });
   }
 
+  const sessionId = crypto.randomUUID();
+  storePendingSession(sessionId, { stack, email, profile });
+
   try {
-    console.log('[1/3] Generating analysis...');
-    const analysis = await generateAnalysis(stack, profile);
+    const checkout = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      mode: 'payment',
+      line_items: [{
+        price: process.env.STRIPE_PRICE_ID,
+        quantity: 1,
+      }],
+      client_reference_id: sessionId,
+      customer_email: email || undefined,
+      success_url: `${process.env.FRONTEND_URL}/success.html?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url:  `${process.env.FRONTEND_URL}`,
+      metadata: { sessionId },
+    });
 
-    console.log('[2/3] Generating 90-day protocol...');
-    const protocol = await generateProtocol(stack, profile);
+    res.json({ url: checkout.url });
+  } catch (err) {
+    console.error('Checkout error:', err.message);
+    res.status(500).json({ error: 'Failed to create checkout session.' });
+  }
+});
 
-    console.log('[3/3] Building PDF...');
-    const pdfBuffer = await buildPDF(analysis, protocol, stack, email);
+
+/**
+ * POST /webhook
+ * Stripe webhook — fires after successful payment.
+ * Generates PDF, emails it, stores it for polling download.
+ */
+app.post('/webhook', async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error('Webhook signature failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type !== 'checkout.session.completed') {
+    return res.json({ received: true });
+  }
+
+  const checkoutSession = event.data.object;
+  const sessionId = checkoutSession.metadata?.sessionId || checkoutSession.client_reference_id;
+  const customerEmail = checkoutSession.customer_details?.email || checkoutSession.customer_email;
+
+  const pending = pendingSessions.get(sessionId);
+  if (!pending) {
+    console.error('No pending session found for:', sessionId);
+    return res.json({ received: true }); // Acknowledge so Stripe doesn't retry forever
+  }
+
+  res.json({ received: true }); // Acknowledge immediately — PDF gen happens async
+
+  // Generate PDF asynchronously after acknowledging
+  setImmediate(async () => {
+    try {
+      const { stack, profile } = pending;
+      const email = customerEmail || pending.email;
+
+      console.log(`[Webhook] Generating report for session ${sessionId}`);
+      console.log('[1/3] Generating analysis...');
+      const analysis = await generateAnalysis(stack, profile);
+
+      console.log('[2/3] Generating 90-day protocol...');
+      const protocol = await generateProtocol(stack, profile);
+
+      console.log('[3/3] Building PDF...');
+      const pdfBuffer = await buildPDF(analysis, protocol, stack, email);
+
+      // Store PDF for download polling (TTL 1 hour)
+      pendingSessions.set(`pdf_${sessionId}`, { pdfBuffer, createdAt: Date.now() });
+      setTimeout(() => pendingSessions.delete(`pdf_${sessionId}`), 60 * 60 * 1000);
+
+      // Send email via Resend
+      if (email) {
+        await resend.emails.send({
+          from: process.env.RESEND_FROM_EMAIL,
+          to: email,
+          subject: 'Your StackScan Report is Ready',
+          html: `
+            <div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;background:#0a0a0f;color:#f0f0f0;border-radius:8px;">
+              <div style="margin-bottom:24px;">
+                <span style="font-size:11px;letter-spacing:0.2em;text-transform:uppercase;color:#c8f542;font-weight:700;">STACKSCAN</span>
+              </div>
+              <h1 style="font-size:22px;font-weight:700;margin:0 0 12px;color:#f0f0f0;">Your report is ready.</h1>
+              <p style="color:#a0a0b8;font-size:14px;line-height:1.7;margin:0 0 28px;">
+                Your personalized supplement report is attached to this email as a PDF. 
+                You can also download it directly from the link below.
+              </p>
+              <a href="${process.env.FRONTEND_URL}/success.html?session_id=${checkoutSession.id}" 
+                 style="display:inline-block;background:#c8f542;color:#0a0a0f;font-weight:700;font-size:14px;padding:14px 28px;border-radius:6px;text-decoration:none;letter-spacing:0.05em;text-transform:uppercase;">
+                Download Your Report
+              </a>
+              <p style="color:#444455;font-size:11px;margin-top:32px;line-height:1.6;">
+                This report is for informational purposes only and does not constitute medical advice.<br>
+                stackscan.health
+              </p>
+            </div>
+          `,
+          attachments: [{
+            filename: 'stackscan_report.pdf',
+            content: pdfBuffer.toString('base64'),
+          }],
+        });
+        console.log(`[Webhook] Email sent to ${email}`);
+      }
+
+      pendingSessions.delete(sessionId); // Clean up the pending session
+      console.log(`[Webhook] Done for session ${sessionId}`);
+
+    } catch (err) {
+      console.error('[Webhook] PDF generation failed:', err.message);
+    }
+  });
+});
+
+
+/**
+ * GET /download/:sessionId
+ * Polled by the success page to download the PDF once generated.
+ */
+app.get('/download/:stripeSessionId', async (req, res) => {
+  const { stripeSessionId } = req.params;
+
+  // Look up the Stripe session to get our internal sessionId
+  try {
+    const checkoutSession = await stripe.checkout.sessions.retrieve(stripeSessionId);
+    const sessionId = checkoutSession.metadata?.sessionId || checkoutSession.client_reference_id;
+    const stored = pendingSessions.get(`pdf_${sessionId}`);
+
+    if (!stored) {
+      return res.status(202).json({ status: 'pending' }); // Still generating
+    }
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'attachment; filename="stackscan_report.pdf"');
-    res.setHeader('Content-Length', pdfBuffer.length);
-    res.end(pdfBuffer);
-    console.log('Report delivered successfully.');
+    res.setHeader('Content-Length', stored.pdfBuffer.length);
+    res.end(stored.pdfBuffer);
 
   } catch (err) {
-    console.error('Report generation failed:', err.message);
-    if (!res.headersSent) {
-      res.status(500).json({ error: 'Failed to generate report. Please try again.' });
-    }
+    console.error('Download error:', err.message);
+    res.status(500).json({ error: 'Download failed.' });
   }
 });
 
