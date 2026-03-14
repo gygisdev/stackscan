@@ -34,6 +34,13 @@ const client = new Anthropic({ apiKey: ENV.ANTHROPIC_API_KEY });
 const PORT   = ENV.PORT;
 console.log(`Starting server on PORT=${PORT}`);
 
+// ── Startup env var check ─────────────────────────────────────────────────────
+const REQUIRED_VARS = ['ANTHROPIC_API_KEY','STRIPE_SECRET_KEY','STRIPE_PRICE_ID','STRIPE_WEBHOOK_SECRET','RESEND_API_KEY'];
+REQUIRED_VARS.forEach(k => {
+  if (!ENV[k]) console.warn(`WARNING: ${k} is not set`);
+  else console.log(`OK: ${k} is set`);
+});
+
 const stripe = Stripe(ENV.STRIPE_SECRET_KEY);
 const resend = new Resend(ENV.RESEND_API_KEY);
 
@@ -639,15 +646,15 @@ app.post('/create-checkout', async (req, res) => {
       }],
       client_reference_id: sessionId,
       customer_email: email || undefined,
-      success_url: `${FRONTEND_URL}/success.html?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url:  `${FRONTEND_URL}`,
+      success_url: `${ENV.FRONTEND_URL}/success.html?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url:  `${ENV.FRONTEND_URL}`,
       metadata: { sessionId },
     });
 
     res.json({ url: checkout.url });
   } catch (err) {
     console.error('Checkout error:', err.message);
-    res.status(500).json({ error: 'Failed to create checkout session.' });
+    res.status(500).json({ error: 'Failed to create checkout session.', detail: err.message });
   }
 });
 
@@ -720,7 +727,7 @@ app.post('/webhook', async (req, res) => {
                 Your personalized supplement report is attached to this email as a PDF. 
                 You can also download it directly from the link below.
               </p>
-              <a href="${FRONTEND_URL}/success.html?session_id=${checkoutSession.id}" 
+              <a href="${ENV.FRONTEND_URL}/success.html?session_id=${checkoutSession.id}" 
                  style="display:inline-block;background:#c8f542;color:#0a0a0f;font-weight:700;font-size:14px;padding:14px 28px;border-radius:6px;text-decoration:none;letter-spacing:0.05em;text-transform:uppercase;">
                 Download Your Report
               </a>
