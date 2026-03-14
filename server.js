@@ -19,7 +19,8 @@ const { Resend }  = require('resend');
 
 const app    = express();
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const PORT   = process.env.PORT || 3001;
+const PORT         = process.env.PORT || 3001;
+const FRONTEND_URL = FRONTEND_URL || 'https://stackscan.health';
 console.log(`Starting server on PORT=${PORT}`);
 
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
@@ -627,8 +628,8 @@ app.post('/create-checkout', async (req, res) => {
       }],
       client_reference_id: sessionId,
       customer_email: email || undefined,
-      success_url: `${process.env.FRONTEND_URL}/success.html?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url:  `${process.env.FRONTEND_URL}`,
+      success_url: `${FRONTEND_URL}/success.html?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url:  `${FRONTEND_URL}`,
       metadata: { sessionId },
     });
 
@@ -708,7 +709,7 @@ app.post('/webhook', async (req, res) => {
                 Your personalized supplement report is attached to this email as a PDF. 
                 You can also download it directly from the link below.
               </p>
-              <a href="${process.env.FRONTEND_URL}/success.html?session_id=${checkoutSession.id}" 
+              <a href="${FRONTEND_URL}/success.html?session_id=${checkoutSession.id}" 
                  style="display:inline-block;background:#c8f542;color:#0a0a0f;font-weight:700;font-size:14px;padding:14px 28px;border-radius:6px;text-decoration:none;letter-spacing:0.05em;text-transform:uppercase;">
                 Download Your Report
               </a>
