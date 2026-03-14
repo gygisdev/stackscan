@@ -1,5 +1,11 @@
 {
   "deploy": {
     "startCommand": "node server.js"
-  }
+  },
+  "steps": {
+    "install": {
+      "secrets": []
+    }
+  },
+  "secrets": []
 }
