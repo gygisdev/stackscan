@@ -17,14 +17,25 @@ const crypto      = require('crypto');
 const Stripe      = require('stripe');
 const { Resend }  = require('resend');
 
+// ── Config — all env vars in one place ───────────────────────────────────────
+const ENV = {
+  ANTHROPIC_API_KEY:     (process.env['ANTHROPIC_API_KEY']     || ''),
+  STRIPE_SECRET_KEY:     (process.env['STRIPE_SECRET_KEY']     || ''),
+  STRIPE_PRICE_ID:       (process.env['STRIPE_PRICE_ID']       || ''),
+  STRIPE_WEBHOOK_SECRET: (process.env['STRIPE_WEBHOOK_SECRET'] || ''),
+  RESEND_API_KEY:        (process.env['RESEND_API_KEY']        || ''),
+  RESEND_FROM_EMAIL:     (process.env['RESEND_FROM_EMAIL']     || 'reports@stackscan.health'),
+  FRONTEND_URL:          (process.env['FRONTEND_URL']          || 'https://stackscan.health'),
+  PORT:                  (process.env['PORT']                  || 3001),
+};
+
 const app    = express();
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const PORT         = process.env.PORT || 3001;
-const FRONTEND_URL = FRONTEND_URL || 'https://stackscan.health';
+const client = new Anthropic({ apiKey: ENV.ANTHROPIC_API_KEY });
+const PORT   = ENV.PORT;
 console.log(`Starting server on PORT=${PORT}`);
 
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
-const resend = new Resend(process.env.RESEND_API_KEY);
+const stripe = Stripe(ENV.STRIPE_SECRET_KEY);
+const resend = new Resend(ENV.RESEND_API_KEY);
 
 // ── In-memory session store ───────────────────────────────────────────────────
 // Stores stack+profile keyed by a UUID until webhook fires and generates the PDF.
@@ -623,7 +634,7 @@ app.post('/create-checkout', async (req, res) => {
       payment_method_types: ['card'],
       mode: 'payment',
       line_items: [{
-        price: process.env.STRIPE_PRICE_ID,
+        price: ENV.STRIPE_PRICE_ID,
         quantity: 1,
       }],
       client_reference_id: sessionId,
@@ -651,7 +662,7 @@ app.post('/webhook', async (req, res) => {
   let event;
 
   try {
-    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    event = stripe.webhooks.constructEvent(req.body, sig, ENV.STRIPE_WEBHOOK_SECRET);
   } catch (err) {
     console.error('Webhook signature failed:', err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
@@ -696,7 +707,7 @@ app.post('/webhook', async (req, res) => {
       // Send email via Resend
       if (email) {
         await resend.emails.send({
-          from: process.env.RESEND_FROM_EMAIL,
+          from: ENV.RESEND_FROM_EMAIL,
           to: email,
           subject: 'Your StackScan Report is Ready',
           html: `
