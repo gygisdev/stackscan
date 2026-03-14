@@ -50,12 +50,17 @@ async function callClaude(prompt, maxTokens) {
   return JSON.parse(raw.replace(/```json|```/g, '').trim());
 }
 
-async function generateAnalysis(stack) {
+async function generateAnalysis(stack, profile = null) {
   const stackText = stack.map(s => `- ${s.name}${s.dose ? ` (${s.dose})` : ''}`).join('\n');
 
-  return callClaude(`You are a supplement science expert. Analyze this stack.
+  const profileSection = profile ? `\nUser Profile:\n${profile}\n` : '';
+
+  return callClaude(`You are a supplement science expert. Analyze this stack and write a fully personalized report.
+
 Stack:
-${stackText}
+${stackText}${profileSection}
+
+IMPORTANT: If user profile is provided, reference it explicitly throughout — mention the user's age, goal, gender, activity level, medications, or dietary needs directly in each relevant section. Tailor dosage advice, timing, and brand recommendations to their specific profile. If medications are listed, check for supplement-drug interactions and flag them with type "danger".
 
 Respond ONLY with valid JSON (no markdown, no backticks).
 Generate one brand_recommendation for EVERY supplement. Generate 6-8 findings.
@@ -79,18 +84,35 @@ Generate one brand_recommendation for EVERY supplement. Generate 6-8 findings.
   ],
   "gaps": [
     { "nutrient": "<n>", "why": "<3-4 sentences>", "suggested_dose": "<dose>" }
-  ]
+  ],
+  "beyond_stack": {
+    "intro": "<2-3 sentences: frame this section around their specific goal>",
+    "supplement_recommendations": [
+      { "name": "<supplement not in their stack>", "reason": "<2-3 sentences: why it fits their goal and profile>", "suggested_dose": "<dose>" }
+    ],
+    "lifestyle_recommendations": [
+      { "category": "<Sleep|Training|Nutrition|Stress|Recovery|Habits>", "recommendation": "<specific actionable advice tailored to their goal and profile, 2-3 sentences>" }
+    ],
+    "resources": [
+      { "title": "<book, podcast, website, or researcher name>", "type": "<Book|Podcast|Website|Researcher>", "reason": "<1-2 sentences: why relevant to their goal>" }
+    ]
+  }
 }`, 5000);
 }
 
-async function generateProtocol(stack) {
+async function generateProtocol(stack, profile = null) {
   const stackText = stack.map(s => `- ${s.name}${s.dose ? ` (${s.dose})` : ''}`).join('\n');
 
-  return callClaude(`You are a supplement science expert. Write a detailed 90-day protocol.
-Stack:
-${stackText}
+  const profileSectionP = profile ? `\nUser Profile:\n${profile}\n` : '';
 
-Respond ONLY with valid JSON (no markdown). Write directly to the user as "you". Reference their supplements by name.
+  return callClaude(`You are a supplement science expert. Write a detailed, personalized 90-day protocol.
+
+Stack:
+${stackText}${profileSectionP}
+
+IMPORTANT: Write directly to the user as "you". If profile information is provided, weave it in naturally and personally throughout — e.g. "Given your goal of muscle gain and high activity level...", "As a 45-year-old male...", "Since you're taking Metformin, you'll want to...". Make the protocol feel written specifically for this person, not generic.
+
+Respond ONLY with valid JSON (no markdown).
 
 {
   "intro": "<4-5 sentences: philosophy, goal, realistic 90-day expectation>",
@@ -440,6 +462,57 @@ function buildPDF(data, protocol, stack, email) {
       });
     }
 
+    // ── Beyond Your Stack ─────────────────────────────────────────────────
+    const beyond = data.beyond_stack;
+    if (beyond) {
+      newPage();
+      sectionHeader('Beyond Your Stack');
+
+      if (beyond.intro) {
+        const introT = safe(beyond.intro);
+        ensureSpace(textH(introT, 10, 'Helvetica', W) + 16);
+        doc.fontSize(10).font('Helvetica').fillColor(C.text)
+           .text(introT, ML, doc.y, { width: W });
+        doc.y += textH(introT, 10, 'Helvetica', W) + 16;
+      }
+
+      // Supplement recommendations
+      if (beyond.supplement_recommendations && beyond.supplement_recommendations.length) {
+        sectionHeader('Supplements Worth Considering');
+        beyond.supplement_recommendations.forEach(s => {
+          card(C.accent, [
+            { text: `${s.name || ''}   ${s.suggested_dose || ''}`, fontSize: 10, font: 'Helvetica-Bold', color: C.text,   marginBottom: 3 },
+            { text: s.reason || '',  fontSize: 9,  font: 'Helvetica',      color: C.muted, marginBottom: 0 },
+          ]);
+        });
+      }
+
+      // Lifestyle recommendations
+      if (beyond.lifestyle_recommendations && beyond.lifestyle_recommendations.length) {
+        sectionHeader('Lifestyle Recommendations');
+        beyond.lifestyle_recommendations.forEach(l => {
+          card(C.accent2, [
+            { text: (l.category || '').toUpperCase(), fontSize: 8,  font: 'Helvetica-Bold', color: C.accent2, marginBottom: 4 },
+            { text: l.recommendation || '',           fontSize: 9,  font: 'Helvetica',      color: C.muted,   marginBottom: 0 },
+          ]);
+        });
+      }
+
+      // Resources
+      if (beyond.resources && beyond.resources.length) {
+        sectionHeader('Recommended Resources');
+        beyond.resources.forEach(r => {
+          const typeColors = { Book: C.accent, Podcast: C.accent2, Website: C.warn, Researcher: '#a78bfa' };
+          const rc = typeColors[r.type] || C.accent2;
+          card(rc, [
+            { text: `${r.title || ''}`, fontSize: 10, font: 'Helvetica-Bold', color: C.text,  marginBottom: 2 },
+            { text: (r.type || '').toUpperCase(), fontSize: 7, font: 'Helvetica-Bold', color: rc, marginBottom: 4 },
+            { text: r.reason || '',  fontSize: 9,  font: 'Helvetica',      color: C.muted, marginBottom: 0 },
+          ]);
+        });
+      }
+    }
+
     // ── Footers on every page ──────────────────────────────────────────────
     const pageCount = doc.bufferedPageRange().count;
     for (let i = 0; i < pageCount; i++) {
@@ -467,30 +540,38 @@ function buildPDF(data, protocol, stack, email) {
  * Free quick scan — returns JSON for the frontend results screen
  */
 app.post('/analyze', async (req, res) => {
-  const { stack } = req.body;
+  const { stack, profile } = req.body;
   if (!stack || stack.length < 2) {
     return res.status(400).json({ error: 'Please provide at least 2 supplements.' });
   }
 
   const stackText = stack.map(s => `- ${s.name}${s.dose ? ` (${s.dose})` : ''}`).join('\n');
+  const profileSection = profile
+    ? `\nUser Profile:\n${profile}\n`
+    : '';
 
-  const prompt = `You are a supplement science expert. Analyze this stack.
+  const prompt = `You are a supplement science expert. Analyze this supplement stack and provide a personalized, practical assessment.
+
 Stack:
-${stackText}
+${stackText}${profileSection}
+
+IMPORTANT: If user profile information is provided above, explicitly reference it in your findings. For example, mention the user's age, gender, activity level, goal, medications, or dietary needs directly in the finding body text where relevant. Do not give generic advice — tailor every finding to this specific person.
+
+If medications are listed, always check for supplement-drug interactions and call them out explicitly.
 
 Respond ONLY with valid JSON (no markdown, no backticks):
 {
   "score": <1-100>,
   "scoreLabel": "<Excellent|Good|Fair|Needs Work>",
-  "scoreSummary": "<1-2 sentence summary>",
+  "scoreSummary": "<1-2 sentence personalized summary referencing their goal or profile if provided>",
   "findings": [
-    { "type": "<ok|warn|danger|info>", "icon": "<emoji>", "title": "<title>", "tag": "<Synergy|Conflict|Redundancy|Timing|Dosage|Gap>", "body": "<2-3 sentences>" }
+    { "type": "<ok|warn|danger|info>", "icon": "<emoji>", "title": "<short finding title>", "tag": "<Synergy|Conflict|Redundancy|Timing|Dosage|Gap|Drug Interaction>", "body": "<2-3 sentences. Reference the user's profile explicitly where relevant. Use <strong> tags to bold supplement and medication names.>" }
   ]
 }
-Include 4-7 findings. Be specific.`;
+Include 4-7 findings. Be specific and personal, not generic.`;
 
   try {
-    const result = await callClaude(prompt, 1000);
+    const result = await callClaude(prompt, 1200);
     res.json(result);
   } catch (err) {
     console.error('Analyze error:', err.message);
@@ -504,17 +585,17 @@ Include 4-7 findings. Be specific.`;
  * Paid full report — generates PDF in memory and streams it back
  */
 app.post('/generate-report', async (req, res) => {
-  const { stack, email = '' } = req.body;
+  const { stack, email = '', profile = null } = req.body;
   if (!stack || stack.length < 1) {
     return res.status(400).json({ error: 'No supplements provided.' });
   }
 
   try {
     console.log('[1/3] Generating analysis...');
-    const analysis = await generateAnalysis(stack);
+    const analysis = await generateAnalysis(stack, profile);
 
     console.log('[2/3] Generating 90-day protocol...');
-    const protocol = await generateProtocol(stack);
+    const protocol = await generateProtocol(stack, profile);
 
     console.log('[3/3] Building PDF...');
     const pdfBuffer = await buildPDF(analysis, protocol, stack, email);
