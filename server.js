@@ -525,7 +525,7 @@ function buildPDF(data, protocol, stack, email) {
          .text('For informational purposes only. Not medical advice.',
                ML, fy + 4, { width: W * 0.6 });
       doc.fillColor('#444455')
-         .text(`stackscan.io  •  Page ${i + 1} of ${pageCount}`,
+         .text(`stackscan.health  •  Page ${i + 1} of ${pageCount}`,
                ML, fy + 4, { width: W, align: 'right' });
     }
 
