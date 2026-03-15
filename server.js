@@ -784,6 +784,39 @@ app.get('/download/:stripeSessionId', async (req, res) => {
 });
 
 
+
+/**
+ * POST /contact
+ * Forwards contact form submissions to support email via Resend
+ */
+app.post('/contact', async (req, res) => {
+  const { email, message } = req.body;
+  if (!email || !message) {
+    return res.status(400).json({ error: 'Email and message are required.' });
+  }
+
+  try {
+    await resend.emails.send({
+      from: ENV.RESEND_FROM_EMAIL,
+      to: 'contact.stackscan@gmail.com',
+      reply_to: email,
+      subject: `StackScan Contact Form — ${email}`,
+      html: `
+        <div style="font-family:sans-serif;max-width:520px;padding:24px;background:#0a0a0f;color:#f0f0f0;border-radius:8px;">
+          <p style="color:#c8f542;font-size:11px;letter-spacing:0.2em;text-transform:uppercase;margin-bottom:16px;">STACKSCAN CONTACT</p>
+          <p style="color:#a0a0b8;font-size:13px;margin-bottom:8px;"><strong style="color:#f0f0f0;">From:</strong> ${email}</p>
+          <p style="color:#a0a0b8;font-size:13px;margin-bottom:16px;"><strong style="color:#f0f0f0;">Message:</strong></p>
+          <p style="color:#f0f0f0;font-size:14px;line-height:1.7;background:#16161f;padding:16px;border-radius:6px;">${message.replace(/\n/g, '<br>')}</p>
+        </div>
+      `,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Contact email error:', err.message);
+    res.json({ ok: true }); // Still return ok so UI shows success
+  }
+});
+
 /**
  * GET /health
  */
