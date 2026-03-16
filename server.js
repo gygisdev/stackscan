@@ -16,6 +16,7 @@ const Anthropic   = require('@anthropic-ai/sdk');
 const crypto      = require('crypto');
 const Stripe      = require('stripe');
 const { Resend }  = require('resend');
+const rateLimit   = require('express-rate-limit');
 
 // ── Config — all env vars in one place ───────────────────────────────────────
 const ENV = {
@@ -69,6 +70,16 @@ const C = {
 };
 
 app.use(cors());
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+const analyzeLimiter = rateLimit({
+  windowMs: 60 * 1000,       // 1 minute window
+  max: 5,                    // 5 requests per IP per minute
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please wait a moment and try again.' },
+  skip: (req) => req.ip === '127.0.0.1', // Don't limit localhost
+});
 
 // Raw body for Stripe webhook — must come BEFORE express.json()
 app.use('/webhook', express.raw({ type: 'application/json' }));
@@ -581,7 +592,7 @@ function buildPDF(data, protocol, stack, email) {
  * POST /analyze
  * Free quick scan — returns JSON for the frontend results screen
  */
-app.post('/analyze', async (req, res) => {
+app.post('/analyze', analyzeLimiter, async (req, res) => {
   const { stack, profile } = req.body;
   if (!stack || stack.length < 2) {
     return res.status(400).json({ error: 'Please provide at least 2 supplements.' });
@@ -756,15 +767,21 @@ app.post('/webhook', async (req, res) => {
 
 
 /**
- * GET /download/:sessionId
- * Polled by the success page to download the PDF once generated.
+ * GET /download/:stripeSessionId
+ * Polled by the success page. Verifies payment completed before serving PDF.
  */
 app.get('/download/:stripeSessionId', async (req, res) => {
   const { stripeSessionId } = req.params;
 
-  // Look up the Stripe session to get our internal sessionId
   try {
+    // Verify with Stripe that this session actually completed payment
     const checkoutSession = await stripe.checkout.sessions.retrieve(stripeSessionId);
+
+    if (checkoutSession.payment_status !== 'paid') {
+      console.warn(`Download attempt on unpaid session: ${stripeSessionId}`);
+      return res.status(402).json({ error: 'Payment not completed.' });
+    }
+
     const sessionId = checkoutSession.metadata?.sessionId || checkoutSession.client_reference_id;
     const stored = pendingSessions.get(`pdf_${sessionId}`);
 
